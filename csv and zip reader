@@ -1,0 +1,128 @@
+
+var SPREADSHEET_ID = '1epX44htKWKhYXHw8ofF0mQ_Egqxlf3wUo-IuBN8H9Tc'; 
+
+/* ------------- no changes below needed ------------- */
+
+var spreadSheet = SpreadsheetApp.openById(SPREADSHEET_ID);
+
+var GMAIL_LABEL = spreadSheet.getRangeByName('gmailLabel').getValue();
+var SPREADSHEET_NAME = spreadSheet.getRangeByName('sheetName').getValue();
+var ROWS_TO_REMOVE = spreadSheet.getRangeByName('rowsToRemove').getValue();
+
+var sheet = spreadSheet.getSheetByName(SPREADSHEET_NAME);
+
+/**
+* Get all the starred threads within our label and process their attachments
+*/
+function main() {
+  var labels = getSubLabels(GMAIL_LABEL);
+  for(var i=0; i<labels.length; i++) {
+    var threads = getUnprocessedThreads(labels[i]);
+    for(j=0; j<threads.length; j++) {
+      processThread(threads[j], labels[i]);
+    }
+  }
+}
+
+/**
+* Get all the given label and all its sub labels
+*
+* @param {string} name
+* @return {GmailLabel[]}
+*/
+function getSubLabels(name) {
+  var labels = GmailApp.getUserLabels();
+  var matches = [];
+  for(var i=0; i<labels.length; i++){
+    var label = labels[i];
+    if(
+      label.getName() === name ||
+      label.getName().substr(0, name.length+1) === name+'/'
+    ) {
+      matches.push(label);
+    }
+  }
+  
+  return matches;
+}
+
+/**
+* Get all starred threads in the given label
+*
+* @param {GmailLabel} label
+* @return {GmailThread[]}
+*/
+function getUnprocessedThreads(label) {
+  var from = 0;
+  var perrun = 50; //maximum is 500
+  var threads;
+  var result = [];
+  
+  do {
+    threads = label.getThreads(from, perrun);
+    from += perrun;
+    
+    for(var i=0; i<threads.length; i++) {
+      if(!threads[i].hasStarredMessages()) continue;
+      result.push(threads[i]);
+    }
+  } while (threads.length === perrun);
+  
+  Logger.log(result.length + ' threads to process in ' + label.getName());
+  return result;
+}
+
+/**
+* @param {GmailThread} thread
+* @param {GmailLabel} label where this thread was found
+*/
+function processThread(thread, label) {
+  var messages = thread.getMessages();
+  for(var j=0; j<messages.length; j++) {
+    var message = messages[j];
+    if(!message.isStarred()) continue;
+    Logger.log('processing message from '+message.getDate());
+    
+    var attachments = message.getAttachments();
+    for(var i=0; i<attachments.length; i++) {
+      var attachment = attachments[i];
+      
+      try {
+        var unZippedfile = Utilities.unzip(attachment);
+        var csvData = Utilities.parseCsv(unZippedfile[0].getDataAsString(), ",");
+        var data = csvData.splice(0, csvData.length - ROWS_TO_REMOVE);
+      }
+      
+      catch(error) {
+        var csvData = Utilities.parseCsv(attachment.getDataAsString(), ",");
+        var data = csvData.splice(0, csvData.length - ROWS_TO_REMOVE);
+      }
+      
+      finally {
+        writeToGoogleSheet(data);
+      }
+    }
+    message.unstar();
+  }
+}
+
+/**
+* Get the extension of a file
+*
+* @param  {string} name
+* @return {string}
+*/
+function getExtension(name) {
+  var re = /(?:\.([^.]+))?$/;
+  var result = re.exec(name);
+  if(result && result[1]) {
+    return result[1].toLowerCase();
+  } else {
+    return 'unknown';
+  }
+}
+
+function writeToGoogleSheet(csvData) {
+  sheet.clearContents().clearFormats();
+  sheet.getRange(1, 1, csvData.length, csvData[0].length).setValues(csvData);
+}
